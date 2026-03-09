@@ -1,0 +1,92 @@
+<!-- ============================================================================
+  Policy: OAuthV2-VerifyAccessToken
+  SharedFlow: sf-auth
+  Purpose  : Validate OAuth 2.0 Bearer token on every inbound request.
+             Populates standard flow variables for downstream policy use.
+  ============================================================================ -->
+<OAuthV2 name="OAuthV2-VerifyAccessToken">
+    <DisplayName>Verify OAuth2 Access Token</DisplayName>
+    <Operation>VerifyAccessToken</Operation>
+
+    <!-- Token must be in Authorization header as Bearer -->
+    <!-- Fallback to query param 'access_token' if header absent -->
+    <AccessTokenPrefix>Bearer</AccessTokenPrefix>
+
+    <!-- Scopes required — override per-proxy if needed via KVM -->
+    <Scope>read write</Scope>
+
+    <!-- Store token info in flow variables for logging -->
+    <GenerateResponse enabled="false"/>
+</OAuthV2>
+
+<!-- ============================================================================
+  Policy: VerifyAPIKey
+  SharedFlow: sf-auth
+  Purpose  : Validate API Key from header 'x-api-key' when OAuth not present.
+             API Keys are managed in Apigee and tied to developer apps.
+  ============================================================================ -->
+<VerifyAPIKey name="VerifyAPIKey-Header">
+    <DisplayName>Verify API Key from Header</DisplayName>
+    <APIKey ref="request.header.x-api-key"/>
+</VerifyAPIKey>
+
+<!-- ============================================================================
+  Policy: RaiseFault-Unauthorized
+  SharedFlow: sf-auth
+  Purpose  : Return a consistent 401 response when authentication fails.
+             Structured JSON response for API consumers.
+  ============================================================================ -->
+<RaiseFault name="RaiseFault-Unauthorized">
+    <DisplayName>Return 401 Unauthorized</DisplayName>
+    <FaultResponse>
+        <Set>
+            <StatusCode>401</StatusCode>
+            <ReasonPhrase>Unauthorized</ReasonPhrase>
+            <Headers>
+                <Header name="Content-Type">application/json</Header>
+                <Header name="WWW-Authenticate">Bearer realm="apigee"</Header>
+            </Headers>
+            <Payload contentType="application/json">{
+  "error": {
+    "code": 401,
+    "status": "UNAUTHORIZED",
+    "message": "Authentication credentials are missing or invalid.",
+    "details": [{
+      "reason": "{fault.name}",
+      "domain": "apigee",
+      "type": "AuthenticationError"
+    }]
+  }
+}</Payload>
+        </Set>
+    </FaultResponse>
+    <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</RaiseFault>
+
+<!-- ============================================================================
+  Policy: AM-SetAuthContext
+  SharedFlow: sf-auth
+  Purpose  : Normalize OAuth + API Key flow variables into a consistent
+             set of context variables used by all downstream policies,
+             logging, and quota enforcement.
+  ============================================================================ -->
+<AssignMessage name="AM-SetAuthContext">
+    <DisplayName>Set Auth Context Variables</DisplayName>
+    <AssignVariable>
+        <Name>auth.client_id</Name>
+        <Value>{apigee.developer.app.name}</Value>
+    </AssignVariable>
+    <AssignVariable>
+        <Name>auth.developer_email</Name>
+        <Value>{apigee.developer.email}</Value>
+    </AssignVariable>
+    <AssignVariable>
+        <Name>auth.product_name</Name>
+        <Value>{apigee.product.name}</Value>
+    </AssignVariable>
+    <AssignVariable>
+        <Name>auth.method</Name>
+        <Value>{request.header.authorization != null ? "oauth2" : "apikey"}</Value>
+    </AssignVariable>
+    <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</AssignMessage>

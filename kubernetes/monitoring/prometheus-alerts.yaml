@@ -1,0 +1,234 @@
+# =============================================================================
+# prometheus-alerts.yaml
+# Purpose : Prometheus alerting rules for Apigee Hybrid platform monitoring.
+#           Covers latency, error rates, component health, Cassandra,
+#           Synchronizer lag, and UDCA telemetry freshness.
+#
+# Apply   : kubectl apply -f kubernetes/monitoring/prometheus-alerts.yaml
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: apigee-hybrid-alerts
+  namespace: apigee
+  labels:
+    prometheus: apigee
+    role: alert-rules
+    managed-by: platform-team
+spec:
+  groups:
+
+    # ── API Traffic: Latency ─────────────────────────────────────────────────
+    - name: apigee.latency
+      interval: 30s
+      rules:
+        - alert: ApigeeHighLatencyP99
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(apigee_proxy_request_duration_bucket[5m])) by (proxy_name, environment, le)
+            ) > 2
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "High p99 Latency — {{ $labels.proxy_name }}"
+            description: |
+              p99 latency for proxy '{{ $labels.proxy_name }}' in environment
+              '{{ $labels.environment }}' is {{ $value | humanizeDuration }},
+              exceeding the 2s SLO threshold.
+            runbook: "https://confluence.company.com/apigee/alerts/high-latency"
+
+        - alert: ApigeeHighLatencyP95
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(apigee_proxy_request_duration_bucket[5m])) by (proxy_name, environment, le)
+            ) > 1
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Elevated p95 Latency — {{ $labels.proxy_name }}"
+            description: "p95 latency is {{ $value | humanizeDuration }} (threshold: 1s)"
+
+    # ── API Traffic: Error Rates ──────────────────────────────────────────────
+    - name: apigee.errors
+      interval: 30s
+      rules:
+        - alert: ApigeeHighErrorRate5xx
+          expr: |
+            sum(rate(apigee_proxy_request_count{status_code=~"5.."}[5m])) by (proxy_name, environment)
+            /
+            sum(rate(apigee_proxy_request_count[5m])) by (proxy_name, environment)
+            > 0.01
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "5xx Error Rate > 1% — {{ $labels.proxy_name }}"
+            description: |
+              Error rate is {{ $value | humanizePercentage }} for proxy
+              '{{ $labels.proxy_name }}' in '{{ $labels.environment }}'.
+            runbook: "https://confluence.company.com/apigee/alerts/error-rate"
+
+        - alert: ApigeeHighErrorRate4xx
+          expr: |
+            sum(rate(apigee_proxy_request_count{status_code=~"4.."}[5m])) by (proxy_name, environment)
+            /
+            sum(rate(apigee_proxy_request_count[5m])) by (proxy_name, environment)
+            > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "4xx Error Rate > 5% — {{ $labels.proxy_name }}"
+            description: "4xx rate is {{ $value | humanizePercentage }}"
+
+    # ── Pod Health ────────────────────────────────────────────────────────────
+    - name: apigee.pods
+      interval: 30s
+      rules:
+        - alert: ApigeeIngressGatewayCrashLoop
+          expr: |
+            increase(kube_pod_container_status_restarts_total{
+              namespace="apigee",
+              container=~"apigee-ingressgateway.*"
+            }[30m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Ingress Gateway pod crash-looping: {{ $labels.pod }}"
+            description: "Pod {{ $labels.pod }} has restarted more than 3 times in 30 minutes."
+
+        - alert: ApigeeMessageProcessorNotReady
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="apigee",
+              deployment="apigee-runtime"
+            }
+            <
+            kube_deployment_spec_replicas{
+              namespace="apigee",
+              deployment="apigee-runtime"
+            }
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Message Processor replicas below desired count"
+            description: |
+              Available: {{ $value }} / Desired:
+              {{ query "kube_deployment_spec_replicas{namespace='apigee',deployment='apigee-runtime'}" | first | value }}
+
+    # ── Synchronizer ──────────────────────────────────────────────────────────
+    - name: apigee.synchronizer
+      interval: 60s
+      rules:
+        - alert: ApigeeSynchronizerLagHigh
+          expr: apigee_synchronizer_lag_seconds > 60
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Synchronizer lag > 60s"
+            description: "Config sync lag is {{ $value }}s. Proxies may be running stale config."
+
+        - alert: ApigeeSynchronizerLagCritical
+          expr: apigee_synchronizer_lag_seconds > 300
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Synchronizer lag > 5 minutes — CRITICAL"
+            description: "Config sync lag is {{ $value }}s. New proxy deployments are NOT propagating."
+
+    # ── UDCA Telemetry ────────────────────────────────────────────────────────
+    - name: apigee.udca
+      interval: 60s
+      rules:
+        - alert: ApigeeUDCADataStale
+          expr: time() - apigee_udca_last_upload_timestamp_seconds > 600
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "UDCA telemetry data stale > 10 minutes"
+            description: "Analytics data may be delayed. Last upload: {{ $value | humanizeTimestamp }}"
+
+    # ── Cassandra ─────────────────────────────────────────────────────────────
+    - name: apigee.cassandra
+      interval: 60s
+      rules:
+        - alert: ApigeeCassandraNodeDown
+          expr: |
+            apigee_cassandra_node_status{status!="UN"} == 1
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Cassandra node NOT in UN state: {{ $labels.node }}"
+            description: "Node {{ $labels.node }} status is {{ $labels.status }}. Run: nodetool status"
+
+        - alert: ApigeeCassandraHighReadLatency
+          expr: apigee_cassandra_read_latency_p99_ms > 50
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Cassandra p99 read latency > 50ms"
+            description: "Cassandra read latency is {{ $value }}ms on {{ $labels.datacenter }}"
+
+    # ── Resource Saturation ───────────────────────────────────────────────────
+    - name: apigee.resources
+      interval: 30s
+      rules:
+        - alert: ApigeeHighCPUUtilization
+          expr: |
+            sum(rate(container_cpu_usage_seconds_total{
+              namespace="apigee",
+              container!=""
+            }[5m])) by (pod, container)
+            /
+            sum(kube_pod_container_resource_limits{
+              namespace="apigee",
+              resource="cpu"
+            }) by (pod, container)
+            > 0.85
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High CPU on {{ $labels.pod }}/{{ $labels.container }}"
+            description: "CPU utilization is {{ $value | humanizePercentage }}"
+
+        - alert: ApigeeHighMemoryUtilization
+          expr: |
+            sum(container_memory_working_set_bytes{
+              namespace="apigee",
+              container!=""
+            }) by (pod, container)
+            /
+            sum(kube_pod_container_resource_limits{
+              namespace="apigee",
+              resource="memory"
+            }) by (pod, container)
+            > 0.85
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High Memory on {{ $labels.pod }}/{{ $labels.container }}"
+            description: "Memory utilization is {{ $value | humanizePercentage }}"

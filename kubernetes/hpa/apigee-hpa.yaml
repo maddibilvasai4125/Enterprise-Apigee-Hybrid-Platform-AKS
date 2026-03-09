@@ -1,0 +1,140 @@
+# =============================================================================
+# apigee-hpa.yaml
+# Purpose : Horizontal Pod Autoscaler definitions for Apigee Hybrid components.
+#           Enables elastic scaling during peak traffic (promotions, batch loads).
+#
+# Apply   : kubectl apply -f kubernetes/hpa/apigee-hpa.yaml -n apigee
+# =============================================================================
+
+# ── Message Processor HPA ─────────────────────────────────────────────────────
+# Scale aggressively: Message Processors carry all proxy execution load.
+# Trigger at 65% CPU so new pods are ready before traffic peaks hit 100%.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: apigee-runtime-hpa
+  namespace: apigee
+  labels:
+    app: apigee-runtime
+    component: message-processor
+    managed-by: platform-team
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: apigee-runtime
+  minReplicas: 3
+  maxReplicas: 12
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60       # React within 1 minute to traffic spikes
+      policies:
+        - type: Pods
+          value: 3                          # Add up to 3 pods per scaling event
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300      # Wait 5 minutes before scaling down
+      policies:
+        - type: Pods
+          value: 1                          # Remove 1 pod at a time (conservative)
+          periodSeconds: 120
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65           # Scale up when avg CPU > 65%
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75           # Scale up when avg memory > 75%
+
+---
+# ── Ingress Gateway HPA ───────────────────────────────────────────────────────
+# Ingress Gateways are connection-heavy; scale on both CPU and connection count.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: apigee-ingressgateway-hpa
+  namespace: apigee
+  labels:
+    app: apigee-ingressgateway
+    component: ingress
+    managed-by: platform-team
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: apigee-ingressgateway
+  minReplicas: 3
+  maxReplicas: 10
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 45
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# ── UDCA HPA ──────────────────────────────────────────────────────────────────
+# UDCA telemetry load spikes when traffic is high.
+# Scale to avoid telemetry queue buildup and Analytics data freshness SLA breach.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: apigee-udca-hpa
+  namespace: apigee
+  labels:
+    app: apigee-udca
+    component: telemetry
+    managed-by: platform-team
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: apigee-udca
+  minReplicas: 2
+  maxReplicas: 6
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 180
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

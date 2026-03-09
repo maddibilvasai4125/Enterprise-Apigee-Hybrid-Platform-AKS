@@ -1,0 +1,9 @@
+<!-- ============================================================================
+  SharedFlow: sf-auth
+  Purpose  : Centralized authentication enforcement for all API proxies.
+             Supports OAuth 2.0 token verification and API Key validation.
+             Attach via Flow Hook or explicit SharedFlowCallout in proxy.
+  ============================================================================ -->
+<SharedFlow name="sf-auth">
+    <Description>Centralized auth: OAuth 2.0 + API Key validation with structured error responses.</Description>
+</SharedFlow>

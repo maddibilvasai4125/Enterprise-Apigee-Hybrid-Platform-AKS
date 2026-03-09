@@ -1,0 +1,30 @@
+<!-- ============================================================================
+  Policy: JS-BuildStructuredLog
+  SharedFlow: sf-logging
+  Purpose  : Build a structured JSON log payload from request/response
+             flow variables. Emitted via MessageLogging policy to centralized
+             log infrastructure (Dynatrace, Splunk, Azure Monitor).
+
+  Log Schema:
+  {
+    "timestamp":       ISO-8601 UTC string,
+    "severity":        INFO | WARN | ERROR,
+    "proxy":           proxy name,
+    "environment":     Apigee environment,
+    "revision":        proxy revision,
+    "correlation_id":  x-correlation-id header or generated UUID,
+    "client_ip":       originating client IP,
+    "method":          HTTP method,
+    "path":            request URI path,
+    "status_code":     response HTTP status code,
+    "latency_ms":      total response latency in milliseconds,
+    "auth_client":     authenticated client app name,
+    "auth_method":     oauth2 | apikey,
+    "target_url":      backend target URL called,
+    "error_code":      Apigee fault code if applicable
+  }
+  ============================================================================ -->
+<Javascript name="JS-BuildStructuredLog" timeLimit="200">
+    <DisplayName>Build Structured JSON Log</DisplayName>
+    <ResourceURL>jsc://buildStructuredLog.js</ResourceURL>
+</Javascript>

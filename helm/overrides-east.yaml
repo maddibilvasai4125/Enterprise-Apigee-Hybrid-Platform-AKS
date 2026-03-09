@@ -1,0 +1,129 @@
+# =============================================================================
+# overrides-east.yaml — East US Region Helm Overrides
+# Apigee Hybrid on AKS — Multi-Region Platform
+#
+# Apply with:
+#   helm upgrade apigee-hybrid apigee/apigee \
+#     -f helm/values-common.yaml \
+#     -f helm/overrides-east.yaml \
+#     --namespace apigee --version $HYBRID_VERSION
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Region Identity
+# ---------------------------------------------------------------------------
+gcp:
+  region: "us-east1"
+
+apigee:
+  environment: "prod-east"
+  axRegion: "us-east1"                        # Analytics region
+
+# ---------------------------------------------------------------------------
+# Ingress Gateway — East
+# ---------------------------------------------------------------------------
+ingressGateway:
+  replicaCount: 3
+  nodeSelector:
+    agentpool: "apigee-ingress-east"
+  tolerations:
+    - key: "apigee-component"
+      operator: "Equal"
+      value: "ingress"
+      effect: "NoSchedule"
+  resources:
+    requests:
+      cpu: "2"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      memory: "4Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# ---------------------------------------------------------------------------
+# Message Processor — East
+# ---------------------------------------------------------------------------
+messageProcessor:
+  replicaCount: 3
+  nodeSelector:
+    agentpool: "apigee-runtime-east"
+  resources:
+    requests:
+      cpu: "2"
+      memory: "4Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 65        # Scale earlier for promotions/peaks
+
+# ---------------------------------------------------------------------------
+# Synchronizer — East
+# ---------------------------------------------------------------------------
+synchronizer:
+  replicaCount: 2
+  nodeSelector:
+    agentpool: "apigee-runtime-east"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# ---------------------------------------------------------------------------
+# UDCA — East
+# ---------------------------------------------------------------------------
+udca:
+  replicaCount: 2
+  nodeSelector:
+    agentpool: "apigee-runtime-east"
+
+# ---------------------------------------------------------------------------
+# Redis — East
+# ---------------------------------------------------------------------------
+redis:
+  replicaCount: 3
+  nodeSelector:
+    agentpool: "apigee-runtime-east"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+# ---------------------------------------------------------------------------
+# Cassandra — East
+# Multi-region replication seeds reference West cluster IPs
+# ---------------------------------------------------------------------------
+cassandra:
+  replicaCount: 3
+  nodeSelector:
+    agentpool: "apigee-cassandra-east"
+  resources:
+    requests:
+      cpu: "2"
+      memory: "8Gi"
+    limits:
+      cpu: "4"
+      memory: "16Gi"
+  multiRegionSeedHost: "10.1.0.10"            # West Cassandra seed IP
+  datacenter: "dc-east"
+  rack: "rack-east-1"
+
+# ---------------------------------------------------------------------------
+# Node Pool Topology (Azure AKS Node Pools)
+# ---------------------------------------------------------------------------
+# Pool: apigee-ingress-east   — Standard_D4s_v3  (4 vCPU / 16 GB) x3
+# Pool: apigee-runtime-east   — Standard_D8s_v3  (8 vCPU / 32 GB) x3–12
+# Pool: apigee-cassandra-east — Standard_D16s_v3 (16 vCPU / 64 GB) x3

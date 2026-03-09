@@ -1,0 +1,107 @@
+# =============================================================================
+# values-common.yaml — Shared Helm Values (All Regions)
+# Apigee Hybrid on AKS — Multi-Region Platform
+#
+# These values are common across East and West deployments.
+# Region-specific tuning (replicas, resources, node selectors) lives in
+# overrides-east.yaml / overrides-west.yaml.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# GCP / Apigee Organization
+# ---------------------------------------------------------------------------
+gcp:
+  projectID: "YOUR_GCP_PROJECT_ID"            # GCP project hosting Apigee org
+  region: "us-east1"                           # Default GCP region for mgmt plane
+
+apigee:
+  organization: "YOUR_APIGEE_ORG"
+
+# ---------------------------------------------------------------------------
+# Kubernetes Namespace
+# ---------------------------------------------------------------------------
+namespace: apigee
+
+# ---------------------------------------------------------------------------
+# Image Registry
+# ---------------------------------------------------------------------------
+imageRegistry: "gcr.io/apigee-release/hybrid"
+
+# ---------------------------------------------------------------------------
+# TLS — Ingress Gateway
+# Certificates are managed via Kubernetes Secrets (populated by cert rotation script)
+# ---------------------------------------------------------------------------
+ingressGateway:
+  tls:
+    minProtocolVersion: "TLSV1_2"             # Enforce TLS 1.2 minimum
+    credentialName: "apigee-ingress-tls"      # Kubernetes TLS Secret name
+  sslRedirect: true
+
+# ---------------------------------------------------------------------------
+# Cassandra — Common Settings
+# Snapshots and backups are managed via scripts/cassandra/cassandra-backup.sh
+# ---------------------------------------------------------------------------
+cassandra:
+  auth:
+    enabled: true
+    secretName: "apigee-cassandra-auth"
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"                     # Daily @ 02:00 UTC
+    cloudProvider: "azure"
+    storageContainer: "apigee-cassandra-backups"
+  tls:
+    enabled: true
+    secretName: "apigee-cassandra-tls"
+  storage:
+    storageClass: "managed-premium"           # Azure Premium SSD
+    capacity: "100Gi"
+
+# ---------------------------------------------------------------------------
+# UDCA — Unified Data Collection Agent
+# Telemetry pipeline: Runtime → Management Plane
+# ---------------------------------------------------------------------------
+udca:
+  enabled: true
+  fluentd:
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+# ---------------------------------------------------------------------------
+# Synchronizer
+# ---------------------------------------------------------------------------
+synchronizer:
+  pollInterval: 60                            # seconds between config polls
+  serviceAccountSecretName: "apigee-synchronizer-svc-account"
+
+# ---------------------------------------------------------------------------
+# Logging — Structured JSON
+# All components emit structured logs consumed by Dynatrace + Prometheus
+# ---------------------------------------------------------------------------
+logger:
+  enabled: true
+  logLevel: "info"
+  format: "json"
+
+# ---------------------------------------------------------------------------
+# Service Accounts — GCP IAM Bindings
+# Each component has its own least-privilege service account
+# ---------------------------------------------------------------------------
+serviceAccounts:
+  apigeeConnect:    "apigee-connect-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com"
+  udca:             "apigee-udca-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com"
+  synchronizer:     "apigee-sync-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com"
+  metrics:          "apigee-metrics-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com"
+
+# ---------------------------------------------------------------------------
+# Monitoring — Prometheus Scrape Annotations
+# ---------------------------------------------------------------------------
+prometheus:
+  enabled: true
+  port: 15090
+  path: "/stats/prometheus"

@@ -1,0 +1,338 @@
+// =============================================================================
+// Jenkinsfile — Apigee Hybrid CI/CD Pipeline
+// Purpose : Lint → Test → Promote API proxies and shared flows across
+//           Dev → Staging → Prod East → Prod West with approval gates,
+//           smoke tests, and automated rollback on failure.
+//
+// Trigger : GitHub webhook on merge to main, or manual for prod promotion.
+// =============================================================================
+
+pipeline {
+    agent { label 'apigee-agent' }
+
+    options {
+        timeout(time: 90, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    parameters {
+        choice(
+            name: 'PROXY_NAME',
+            choices: ['ALL', 'payments-v2', 'identity-v1', 'products-v3'],
+            description: 'API proxy to deploy. Select ALL for full platform deploy.'
+        )
+        choice(
+            name: 'TARGET_ENV',
+            choices: ['dev', 'staging', 'prod-east', 'prod-west', 'prod-all'],
+            description: 'Target environment for deployment.'
+        )
+        booleanParam(
+            name: 'RUN_LOAD_TEST',
+            defaultValue: false,
+            description: 'Run BlazeMeter load test after staging deploy?'
+        )
+        booleanParam(
+            name: 'SKIP_APPROVAL',
+            defaultValue: false,
+            description: 'Skip manual approval gate (non-prod only).'
+        )
+    }
+
+    environment {
+        APIGEE_ORG         = credentials('apigee-org')
+        GCP_SA_KEY         = credentials('gcp-apigee-deploy-sa')
+        BLAZEMETER_API_KEY = credentials('blazemeter-api-key')
+        APIGEE_CLI         = '/usr/local/bin/apigeecli'
+        LINT_CONFIG        = './cicd/lint-rules.json'
+        PROXY_DIR          = './proxies'
+        SHAREDFLOW_DIR     = './policies/shared-flows'
+    }
+
+    stages {
+
+        // ── Stage 1: Checkout & Environment Setup ────────────────────────────
+        stage('Checkout & Setup') {
+            steps {
+                checkout scm
+                script {
+                    env.BUILD_TAG    = "${env.BUILD_NUMBER}-${env.GIT_COMMIT[0..7]}"
+                    env.DEPLOY_TIME  = sh(script: 'date -u +%Y-%m-%dT%H:%M:%SZ', returnStdout: true).trim()
+                }
+                sh '''
+                    echo "Build: ${BUILD_TAG}"
+                    echo "Proxy: ${PROXY_NAME}"
+                    echo "Env  : ${TARGET_ENV}"
+                    echo "Time : ${DEPLOY_TIME}"
+
+                    # Authenticate to GCP
+                    echo "$GCP_SA_KEY" > /tmp/gcp-sa-key.json
+                    gcloud auth activate-service-account --key-file=/tmp/gcp-sa-key.json
+                    rm -f /tmp/gcp-sa-key.json
+                    gcloud config set project "${GCP_PROJECT_ID}"
+                '''
+            }
+        }
+
+        // ── Stage 2: Policy Linting ───────────────────────────────────────────
+        stage('Lint & Validate') {
+            steps {
+                echo '── Running Apigee policy lint rules ──'
+                sh '''
+                    # Install apigeelint if not present
+                    if ! command -v apigeelint &>/dev/null; then
+                        npm install -g apigeelint --quiet
+                    fi
+
+                    PROXIES_TO_LINT="${PROXY_NAME}"
+                    [[ "$PROXIES_TO_LINT" == "ALL" ]] && PROXIES_TO_LINT=$(ls "$PROXY_DIR")
+
+                    LINT_FAILED=0
+                    for PROXY in $PROXIES_TO_LINT; do
+                        PROXY_PATH="$PROXY_DIR/$PROXY"
+                        [[ -d "$PROXY_PATH" ]] || continue
+
+                        echo "Linting: $PROXY"
+                        apigeelint \
+                            --path "$PROXY_PATH" \
+                            --formatter table \
+                            --excluded-rules "PO006" \
+                            --externalPluginsDirectory ./cicd/lint-plugins \
+                            || LINT_FAILED=1
+                    done
+
+                    exit $LINT_FAILED
+                '''
+            }
+            post {
+                failure {
+                    echo 'Lint FAILED — proxy deployment blocked. Fix policy violations and re-run.'
+                }
+            }
+        }
+
+        // ── Stage 3: Deploy to Dev ────────────────────────────────────────────
+        stage('Deploy → Dev') {
+            when {
+                anyOf {
+                    expression { params.TARGET_ENV == 'dev' }
+                    expression { params.TARGET_ENV in ['staging', 'prod-east', 'prod-west', 'prod-all'] }
+                }
+            }
+            steps {
+                echo '── Deploying to Dev ──'
+                sh '''
+                    ./cicd/deploy-proxy.sh \
+                        --proxy "${PROXY_NAME}" \
+                        --env   "dev" \
+                        --org   "${APIGEE_ORG}" \
+                        --revision "new"
+                '''
+            }
+            post {
+                success { echo 'Dev deployment successful.' }
+                failure { error 'Dev deployment failed. Pipeline stopped.' }
+            }
+        }
+
+        // ── Stage 4: Smoke Test — Dev ─────────────────────────────────────────
+        stage('Smoke Test — Dev') {
+            when {
+                expression { params.TARGET_ENV in ['staging', 'prod-east', 'prod-west', 'prod-all'] }
+            }
+            steps {
+                sh '''
+                    ./cicd/smoke-test.sh \
+                        --env   "dev" \
+                        --proxy "${PROXY_NAME}" \
+                        --base-url "${DEV_BASE_URL}"
+                '''
+            }
+        }
+
+        // ── Stage 5: Deploy to Staging ────────────────────────────────────────
+        stage('Deploy → Staging') {
+            when {
+                expression { params.TARGET_ENV in ['staging', 'prod-east', 'prod-west', 'prod-all'] }
+            }
+            steps {
+                echo '── Deploying to Staging ──'
+                sh '''
+                    ./cicd/deploy-proxy.sh \
+                        --proxy "${PROXY_NAME}" \
+                        --env   "staging" \
+                        --org   "${APIGEE_ORG}" \
+                        --revision "new"
+                '''
+            }
+        }
+
+        // ── Stage 6: Load Test — Staging (Optional) ───────────────────────────
+        stage('Load Test — Staging') {
+            when {
+                allOf {
+                    expression { params.RUN_LOAD_TEST == true }
+                    expression { params.TARGET_ENV in ['prod-east', 'prod-west', 'prod-all'] }
+                }
+            }
+            steps {
+                echo '── Triggering BlazeMeter load test against Staging ──'
+                sh '''
+                    curl -s -X POST \
+                        -H "x-api-key: ${BLAZEMETER_API_KEY}" \
+                        -H "Content-Type: application/json" \
+                        -d "{\"testId\": \"${BLAZEMETER_TEST_ID}\", \"note\": \"Jenkins build ${BUILD_TAG}\"}" \
+                        "https://a.blazemeter.com/api/latest/tests/${BLAZEMETER_TEST_ID}/start" \
+                    | jq .
+
+                    echo "Load test started. Monitor at https://a.blazemeter.com"
+                    echo "Waiting 5 minutes for initial results..."
+                    sleep 300
+
+                    # Fetch results and fail if p99 > 2s or error rate > 1%
+                    ./cicd/check-loadtest-results.sh --test-id "${BLAZEMETER_TEST_ID}"
+                '''
+            }
+        }
+
+        // ── Stage 7: Manual Approval Gate ─────────────────────────────────────
+        stage('Approval Gate — Production') {
+            when {
+                allOf {
+                    expression { params.TARGET_ENV in ['prod-east', 'prod-west', 'prod-all'] }
+                    expression { params.SKIP_APPROVAL == false }
+                }
+            }
+            steps {
+                script {
+                    def approver = input(
+                        id: 'ProdApproval',
+                        message: "Approve deployment of '${params.PROXY_NAME}' to PRODUCTION?",
+                        submitterParameter: 'APPROVER',
+                        parameters: [
+                            string(name: 'CHANGE_TICKET', description: 'ServiceNow change ticket number (CHG-XXXXXX)'),
+                            booleanParam(name: 'CONFIRM', defaultValue: false, description: 'I confirm this change is approved')
+                        ]
+                    )
+                    env.APPROVER = approver.APPROVER
+                    env.CHANGE_TICKET = approver.CHANGE_TICKET
+                    echo "Approved by: ${env.APPROVER} | Ticket: ${env.CHANGE_TICKET}"
+                }
+            }
+        }
+
+        // ── Stage 8: Deploy to Prod East ──────────────────────────────────────
+        stage('Deploy → Prod East') {
+            when {
+                expression { params.TARGET_ENV in ['prod-east', 'prod-all'] }
+            }
+            steps {
+                echo '── Deploying to Prod East ──'
+                sh '''
+                    ./cicd/deploy-proxy.sh \
+                        --proxy "${PROXY_NAME}" \
+                        --env   "prod-east" \
+                        --org   "${APIGEE_ORG}" \
+                        --revision "new" \
+                        --validate true
+                '''
+            }
+        }
+
+        // ── Stage 9: Post-Deploy Health Check — Prod East ─────────────────────
+        stage('Health Check — Prod East') {
+            when {
+                expression { params.TARGET_ENV in ['prod-east', 'prod-all'] }
+            }
+            steps {
+                sh './scripts/health-check/component-health-check.sh --namespace apigee'
+                sh '''
+                    ./cicd/smoke-test.sh \
+                        --env "prod-east" \
+                        --proxy "${PROXY_NAME}" \
+                        --base-url "${PROD_EAST_BASE_URL}"
+                '''
+            }
+            post {
+                failure {
+                    echo 'Prod East health check failed — halting Prod West deployment.'
+                    error 'Investigate Prod East before promoting to Prod West.'
+                }
+            }
+        }
+
+        // ── Stage 10: Deploy to Prod West ─────────────────────────────────────
+        stage('Deploy → Prod West') {
+            when {
+                expression { params.TARGET_ENV in ['prod-west', 'prod-all'] }
+            }
+            steps {
+                echo '── Deploying to Prod West ──'
+                sh '''
+                    ./cicd/deploy-proxy.sh \
+                        --proxy "${PROXY_NAME}" \
+                        --env   "prod-west" \
+                        --org   "${APIGEE_ORG}" \
+                        --revision "new" \
+                        --validate true
+                '''
+            }
+        }
+
+        // ── Stage 11: Final Validation ────────────────────────────────────────
+        stage('Final Validation') {
+            when {
+                expression { params.TARGET_ENV in ['prod-east', 'prod-west', 'prod-all'] }
+            }
+            steps {
+                sh '''
+                    echo "== Final multi-region smoke tests =="
+
+                    if [[ "${TARGET_ENV}" == "prod-all" || "${TARGET_ENV}" == "prod-east" ]]; then
+                        ./cicd/smoke-test.sh --env prod-east --proxy "${PROXY_NAME}" --base-url "${PROD_EAST_BASE_URL}"
+                    fi
+
+                    if [[ "${TARGET_ENV}" == "prod-all" || "${TARGET_ENV}" == "prod-west" ]]; then
+                        ./cicd/smoke-test.sh --env prod-west --proxy "${PROXY_NAME}" --base-url "${PROD_WEST_BASE_URL}"
+                    fi
+
+                    echo "All validation checks passed."
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                def msg = """
+✅ *Apigee Deployment Successful*
+• Proxy  : ${params.PROXY_NAME}
+• Env    : ${params.TARGET_ENV}
+• Build  : ${env.BUILD_TAG}
+• Time   : ${env.DEPLOY_TIME}
+• Ticket : ${env.CHANGE_TICKET ?: 'N/A'}
+                """.stripIndent()
+                // slackSend channel: '#apigee-deployments', message: msg, color: 'good'
+                echo msg
+            }
+        }
+        failure {
+            script {
+                def msg = """
+❌ *Apigee Deployment FAILED*
+• Proxy  : ${params.PROXY_NAME}
+• Env    : ${params.TARGET_ENV}
+• Build  : ${env.BUILD_TAG}
+• Action : Check Jenkins logs. Auto-rollback may have triggered.
+                """.stripIndent()
+                // slackSend channel: '#apigee-alerts', message: msg, color: 'danger'
+                echo msg
+            }
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
