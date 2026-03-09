@@ -43,9 +43,9 @@ This repository contains all Infrastructure-as-Code, automation scripts, Helm ov
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         APIGEE HYBRID — MULTI-REGION                    │
-│                                                                         │
+┌────────────────────────────────────────────────────────────────────────┐
+│                         APIGEE HYBRID — MULTI-REGION                   │
+│                                                                        │
 │   ┌──────── EAST US ────────┐         ┌──────── WEST US ────────┐      │
 │   │  AKS Cluster (East)     │         │  AKS Cluster (West)     │      │
 │   │                         │         │                         │      │
@@ -66,17 +66,17 @@ This repository contains all Infrastructure-as-Code, automation scripts, Helm ov
 │   │  │  (Datastore)     │   │  Cross- │  │  (Datastore)     │   │      │
 │   │  └─────────────────┘    │  Region │  └─────────────────┘    │      │
 │   └─────────────────────────┘  Repl.  └─────────────────────────┘      │
-│                                                                         │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │               APIGEE MANAGEMENT PLANE (Google Cloud)             │  │
-│   │   Apigee Org  │  Environments  │  Analytics  │  Control Plane    │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-│                                                                         │
+│                                                                        │
+│   ┌──────────────────────────────────────────────────────────────────┐ │
+│   │               APIGEE MANAGEMENT PLANE (Google Cloud)             │ │
+│   │   Apigee Org  │  Environments  │  Analytics  │  Control Plane    │ │
+│   └──────────────────────────────────────────────────────────────────┘ │
+│                                                                        │
 │   ┌─────────────────────────────────┐                                  │
 │   │  INGRESS / DNS                  │                                  │
 │   │  Akamai CDN  │  Azure DNS       │                                  │
 │   └─────────────────────────────────┘                                  │
-└─────────────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Health Matrix
@@ -317,10 +317,6 @@ All AKS nodes are instrumented with the Dynatrace OneAgent DaemonSet. Custom das
 
 ---
 
-## Upgrade Runbook
-
-> Full step-by-step guide in [`docs/upgrade-runbook.md`](docs/upgrade-runbook.md)
-
 ### High-Level Steps (e.g., 1.14.x → 1.15.x)
 
 ```bash
@@ -383,8 +379,6 @@ All API proxies emit structured JSON logs via the centralized `sf-logging` Share
 
 ## Disaster Recovery
 
-> Full procedures in [`docs/dr-runbook.md`](docs/dr-runbook.md)
-
 | Scenario | RTO | RPO | Strategy |
 |---|---|---|---|
 | Single pod failure | < 1 min | 0 | Kubernetes self-heal |
@@ -405,7 +399,7 @@ Pre-upgrade        — Manual tagged snapshot
 
 ## Migration: OPDK → Hybrid
 
-A dedicated compatibility matrix and migration guide are maintained in [`docs/opdk-hybrid-migration.md`](docs/opdk-hybrid-migration.md).
+A dedicated compatibility matrix and migration guide.
 
 ### Migration Checklist Summary
 
@@ -428,11 +422,13 @@ A dedicated compatibility matrix and migration guide are maintained in [`docs/op
 
 ---
 
-## Maintainer
+## 👤 Author
 
-**Bilva Sai Eswar Maddi** — Senior Apigee Platform Engineer  
-*Apigee Hybrid | AKS | API Governance | SRE | Platform Engineering*
+**Bilva Sai Eswar Maddi**
 
----
+- 🐙 GitHub: [@maddibilvasai4125](https://github.com/maddibilvasai4125)
+- 💼 LinkedIn: [Bilva Sai Eswar Maddi](https://www.linkedin.com/in/bilva-sai-eswar-maddi/)
+- 📧 Email: catchbilvasaieswar@gmail.com
+- 🌐 Portfolio: [My Portfolio](https://bilvasaieswarmaddi.com/)
 
-*Last updated: 2024 | Apigee Hybrid v1.15.x | AKS 1.27+*
+| Apigee Hybrid v1.15.x | AKS 1.27+*
